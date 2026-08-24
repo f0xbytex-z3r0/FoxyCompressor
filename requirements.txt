@@ -1,5 +1,0 @@
-ttkbootstrap==2.1.0
-pillow==10.0.0
-py7zr==0.20.5
-ffmpeg-python==0.2.0
-piexif==1.1.3
