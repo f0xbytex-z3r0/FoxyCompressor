@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
-use image::ImageReader;
+use image::{DynamicImage, ImageReader};
 use indicatif::{ProgressBar, ProgressStyle};
 use sevenz_rust::{SevenZArchiveEntry, SevenZWriter};
 use std::collections::HashMap;
@@ -128,7 +128,20 @@ fn main() -> Result<()> {
     let mut work_done = 0;
     for category in [Category::Images, Category::Videos] {
         for (source, relative) in files.remove(&category).unwrap_or_default() {
-            process_media(&args, category, &source, &relative, &output)?;
+            if let Err(error) = process_media(&args, category, &source, &relative, &output) {
+                eprintln!(
+                    "Warning: could not process {}; copying original ({error})",
+                    relative.display()
+                );
+                if let Err(fallback_error) =
+                    copy_as_is(&source, category, &relative, &output, args.overwrite)
+                {
+                    eprintln!(
+                        "Error: could not copy original {}: {fallback_error}",
+                        relative.display()
+                    );
+                }
+            }
             work_done += 1;
             println!(
                 "@FOXY_PROGRESS {work_done} {work_total} {} {}",
@@ -141,13 +154,32 @@ fn main() -> Result<()> {
         let entries = files.remove(&category).unwrap_or_default();
         if !entries.is_empty() {
             println!("@FOXY_STAGE {} 0", category.folder());
-            create_archive(
+            if let Err(error) = create_archive(
                 category,
                 &entries,
                 &output,
                 args.overwrite,
                 args.archive_level,
-            )?;
+            ) {
+                eprintln!(
+                    "Warning: could not create {} archive; copying original files ({error})",
+                    category.folder()
+                );
+                let archive_path = output.join(category.archive_name());
+                if !archive_path.exists() || args.overwrite {
+                    let _ = fs::remove_file(&archive_path);
+                }
+                for (source, relative) in &entries {
+                    if let Err(fallback_error) =
+                        copy_as_is(source, category, relative, &output, args.overwrite)
+                    {
+                        eprintln!(
+                            "Error: could not copy original {}: {fallback_error}",
+                            relative.display()
+                        );
+                    }
+                }
+            }
             work_done += 1;
             println!(
                 "@FOXY_PROGRESS {work_done} {work_total} {} archive",
@@ -238,9 +270,7 @@ fn process_media(
         let image = ImageReader::open(source)
             .with_context(|| format!("could not read {}", source.display()))?
             .decode()?;
-        let encoded = webp::Encoder::from_image(&image)
-            .map_err(|error| anyhow::anyhow!("could not initialize WebP encoder: {error}"))?
-            .encode(args.image_quality as f32);
+        let encoded = encode_webp(&image, args.image_quality)?;
         fs::write(&destination, &*encoded)?;
     } else if !args.copy_videos {
         let ffmpeg = find_ffmpeg(args);
@@ -323,6 +353,38 @@ fn process_media(
     }
     println!("Processed {}", relative.display());
     Ok(())
+}
+
+fn copy_as_is(
+    source: &Path,
+    category: Category,
+    relative: &Path,
+    output: &Path,
+    overwrite: bool,
+) -> Result<()> {
+    let destination = destination(
+        output,
+        category,
+        relative,
+        source.extension().and_then(OsStr::to_str),
+    );
+    if destination.exists() && !overwrite {
+        anyhow::bail!(
+            "fallback destination exists (use --overwrite): {}",
+            destination.display()
+        );
+    }
+    fs::create_dir_all(destination.parent().unwrap())?;
+    fs::copy(source, destination)?;
+    println!("Copied original {}", relative.display());
+    Ok(())
+}
+
+fn encode_webp(image: &DynamicImage, quality: u8) -> Result<webp::WebPMemory> {
+    // webp 0.3 only accepts Rgb8 and Rgba8 through from_image. Normalizing here
+    // also handles grayscale and higher-bit-depth images decoded by image.
+    let rgba = image.to_rgba8();
+    Ok(webp::Encoder::from_rgba(rgba.as_raw(), rgba.width(), rgba.height()).encode(quality as f32))
 }
 
 fn show_ffmpeg_progress<R: BufRead>(mut reader: R) {
@@ -468,5 +530,13 @@ mod tests {
         assert_eq!(Category::Audio.archive_name(), "audio.7z");
         assert_eq!(Category::Documents.archive_name(), "documents.7z");
         assert_eq!(Category::Other.archive_name(), "other.7z");
+    }
+
+    #[test]
+    fn encodes_grayscale_images() {
+        let image =
+            DynamicImage::ImageLuma8(image::GrayImage::from_pixel(1, 1, image::Luma([128])));
+        let encoded = encode_webp(&image, 80).expect("grayscale image should encode");
+        assert!(!encoded.is_empty());
     }
 }
