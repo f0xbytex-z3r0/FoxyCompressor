@@ -1,0 +1,21 @@
+[package]
+name = "foxycompressor"
+version = "0.1.0"
+edition = "2024"
+description = "Structure-preserving, type-aware file compressor"
+license = "AGPL-3.0"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+image = { version = "0.25", default-features = false, features = ["bmp", "gif", "jpeg", "png", "tiff", "webp"] }
+ico = "0.4"
+eframe = "0.31"
+indicatif = "0.18"
+rfd = "0.15"
+sevenz-rust = "0.6"
+walkdir = "2"
+webp = "0.3"
+
+[build-dependencies]
+winresource = "0.1"
