@@ -1,4 +1,4 @@
-```markdown
+
 # FoxyCompressor
 
 > Hello, FoxyCompressor v3.0 beta. This version is a complete rewrite in Rust,
